@@ -18,7 +18,7 @@ namespace Controller
         private ClientWebSocket? _ws;
         private CancellationTokenSource? _cts;
 
-        public string? RelayServerURL { get; set; }
+        public string? RelayServerURL { get; set; } = "http://aids.caretop.com";
         public string? AgentID { get; set; }
         public bool UseRelay => !string.IsNullOrEmpty(RelayServerURL);
 
@@ -190,6 +190,53 @@ namespace Controller
             await _stream!.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
             await _stream.WriteAsync(typePrefix, 0, typePrefix.Length);
             await _stream.WriteAsync(data, 0, data.Length);
+        }
+
+        // 发送控制指令（文本命令，如 MOUSE_MOVE:x,y）
+        public async Task SendControlAsync(string command)
+        {
+            var bytes = Encoding.UTF8.GetBytes(command);
+            await SendControlAsync(bytes);
+        }
+
+        // 发送原始字节数据（用于认证等）
+        public async Task SendControlAsync(byte[] data)
+        {
+            if (UseRelay && _ws != null)
+            {
+                await _ws.SendAsync(
+                    new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary,
+                    true,
+                    _cts!.Token);
+            }
+            else if (_stream != null)
+            {
+                await _stream.WriteAsync(data, 0, data.Length);
+            }
+        }
+
+        // 接收指定字节数
+        public async Task<byte[]> ReceiveAsync(int count)
+        {
+            if (UseRelay && _ws != null)
+            {
+                var buffer = new byte[count];
+                int totalRead = 0;
+                while (totalRead < count)
+                {
+                    var chunk = new byte[count - totalRead];
+                    var result = await _ws.ReceiveAsync(new ArraySegment<byte>(chunk), _cts!.Token);
+                    if (result.Count == 0) break;
+                    Buffer.BlockCopy(chunk, 0, buffer, totalRead, result.Count);
+                    totalRead += result.Count;
+                }
+                return totalRead == count ? buffer : buffer.Take(totalRead).ToArray();
+            }
+
+            var result2 = new byte[count];
+            int read = await _stream!.ReadAsync(result2, 0, count);
+            return read == count ? result2 : result2.Take(read).ToArray();
         }
 
         public void Disconnect()
