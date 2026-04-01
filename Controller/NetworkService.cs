@@ -192,18 +192,20 @@ namespace Controller
             await _stream.WriteAsync(data, 0, data.Length);
         }
 
-        // 发送控制指令（文本命令，如 MOUSE_MOVE:x,y）
+        // 发送控制指令（统一使用帧格式：4字节长度+1字节类型+数据）
         public async Task SendControlAsync(string command)
         {
             var bytes = Encoding.UTF8.GetBytes(command);
-            await SendControlAsync(bytes);
+            await SendFrameAsync(bytes, 3); // type 3 = control command
         }
 
         // 发送原始字节数据（用于认证等）
         public async Task SendControlAsync(byte[] data)
         {
+            // 认证时发送原始数据（无帧格式），因为 Agent 直连模式期望无帧
             if (UseRelay && _ws != null)
             {
+                // Relay 模式：发原始字节，tunnel 会正确转发
                 await _ws.SendAsync(
                     new ArraySegment<byte>(data),
                     WebSocketMessageType.Binary,
