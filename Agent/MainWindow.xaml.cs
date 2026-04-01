@@ -49,6 +49,12 @@ namespace Agent
                     _isConnected = true;
                     ConnectionStatus.Status = StatusIndicator.StatusType.Green;
                     UpdateStatus("Relay connected, awaiting controller...");
+                    // 中继模式：连接成功后立即开始发送屏幕
+                    if (_useRelay)
+                    {
+                        _captureTimer.Start();
+                        UpdateStatus("Relay mode active — sending screen frames");
+                    }
                 });
             };
             _networkService.ClientDisconnected += (s, e) =>
