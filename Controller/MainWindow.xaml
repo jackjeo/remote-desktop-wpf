@@ -71,6 +71,23 @@
                                  Foreground="{StaticResource TextPrimaryBrush}"
                                  BorderBrush="{StaticResource BorderBrush}"/>
 
+                    <Border Background="{StaticResource AccentPrimaryBrush}" Opacity="0.15"
+                            BorderBrush="{StaticResource AccentPrimaryBrush}"
+                            BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="⚡ Relay Mode (aids.caretop.com)"
+                                       Foreground="{StaticResource AccentPrimaryBrush}"
+                                       FontSize="11" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBlock Text="Enter Agent ID (UUID) to connect via relay:"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       FontSize="10" Margin="0,0,0,5"/>
+                            <TextBox x:Name="AgentIdTextBox"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     Text=""
+                                     ToolTip="Leave empty to use direct mode (Host:Port)"/>
+                        </StackPanel>
+                    </Border>
+
                     <Border Background="{StaticResource BackgroundPrimaryBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="10">
@@ -143,6 +160,8 @@
                 <TextBlock x:Name="InfoText" Text="Ready"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock Text="  |  FPS:" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                <TextBlock x:Name="FpsText" Text="-" Foreground="{StaticResource SuccessBrush}" FontSize="12" VerticalAlignment="Center" Margin="4,0,0,0"/>
             </StackPanel>
         </Border>
     </Grid>
