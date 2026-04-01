@@ -16,8 +16,10 @@ namespace Agent
         private readonly CommandExecutor _commandExecutor;
         private readonly SystemTrayService _trayService;
         private readonly DispatcherTimer _captureTimer;
+        private readonly NetworkService _networkService;
         private bool _isRunning;
         private bool _isConnected;
+        private bool _useRelay;
         private string _password = "default_password";
 
         public MainWindow()
@@ -28,9 +30,37 @@ namespace Agent
             _commandExecutor = new CommandExecutor();
             _trayService = new SystemTrayService(this);
 
+            // 硬编码中继服务器地址
+            _networkService = new NetworkService();
+
             _captureTimer = new DispatcherTimer();
             _captureTimer.Interval = TimeSpan.FromMilliseconds(100);
             _captureTimer.Tick += CaptureTimer_Tick;
+
+            // 监听 NetworkService 事件（用于 relay 模式）
+            _networkService.DataReceived += (s, data) =>
+            {
+                Dispatcher.Invoke(() => ProcessCommand(data));
+            };
+            _networkService.ClientConnected += (s, e) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _isConnected = true;
+                    ConnectionStatus.Status = StatusIndicator.StatusType.Green;
+                    UpdateStatus("Relay connected, awaiting controller...");
+                });
+            };
+            _networkService.ClientDisconnected += (s, e) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _isConnected = false;
+                    _captureTimer.Stop();
+                    ConnectionStatus.Status = StatusIndicator.StatusType.Gray;
+                    UpdateStatus("Relay disconnected");
+                });
+            };
 
             Loaded += MainWindow_Loaded;
         }
@@ -52,18 +82,33 @@ namespace Agent
             }
         }
 
-        private void StartServer()
+        private async void StartServer()
         {
             try
             {
                 int port = int.Parse(PortTextBox.Text);
-                _listener = new TcpListener(IPAddress.Any, port);
-                _listener.Start();
-                _isRunning = true;
-                StartButton.Content = "Stop";
-                UpdateStatus($"Listening on port {port}...");
 
-                _ = AcceptClientAsync();
+                // 如果配置了中继服务器地址，使用 relay 模式
+                _useRelay = !string.IsNullOrEmpty(_networkService.RelayServerURL);
+                if (_useRelay)
+                {
+                    UpdateStatus($"Starting relay mode, connecting to {_networkService.RelayServerURL}...");
+                    await _networkService.StartAsync(port);
+                    _isRunning = true;
+                    StartButton.Content = "Stop";
+                    ConnectionStatus.Status = StatusIndicator.StatusType.Orange;
+                    UpdateStatus($"Relay mode active (Server: {_networkService.RelayServerURL})");
+                }
+                else
+                {
+                    // 直连模式
+                    _listener = new TcpListener(IPAddress.Any, port);
+                    _listener.Start();
+                    _isRunning = true;
+                    StartButton.Content = "Stop";
+                    UpdateStatus($"Listening on port {port} (direct mode)...");
+                    _ = AcceptClientAsync();
+                }
             }
             catch (Exception ex)
             {
@@ -75,14 +120,24 @@ namespace Agent
         {
             _isRunning = false;
             _captureTimer.Stop();
-            DisconnectClient();
-            _listener?.Stop();
-            _listener = null;
+
+            if (_useRelay)
+            {
+                _networkService.Stop();
+            }
+            else
+            {
+                DisconnectClient();
+                _listener?.Stop();
+                _listener = null;
+            }
+
             StartButton.Content = "Start";
             ConnectionStatus.Status = StatusIndicator.StatusType.Gray;
             UpdateStatus("Server stopped");
         }
 
+        // ── 直连模式：接受客户端 ────────────────────────────────
         private async Task AcceptClientAsync()
         {
             while (_isRunning)
@@ -130,11 +185,8 @@ namespace Agent
                 if (response.StartsWith("PASSWORD:"))
                 {
                     string receivedPassword = response.Substring(9);
-                    byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(_password));
-                    byte[] expectedHash = SHA256.HashData(challenge.Concat(Encoding.UTF8.GetBytes(_password)).ToArray());
-
-                    using var sha256 = SHA256.Create();
-                    byte[] computedHash = sha256.ComputeHash(challenge.Concat(Encoding.UTF8.GetBytes(_password)).ToArray());
+                    byte[] computedHash = sha256(challenge, receivedPassword);
+                    byte[] expectedHash = sha256(challenge, _password);
 
                     byte[] authResult = new byte[1];
                     authResult[0] = computedHash.SequenceEqual(expectedHash) ? (byte)0 : (byte)1;
@@ -151,6 +203,13 @@ namespace Agent
             {
                 return false;
             }
+        }
+
+        private byte[] sha256(byte[] input1, string input2)
+        {
+            using var sha256 = SHA256.Create();
+            byte[] combined = input1.Concat(Encoding.UTF8.GetBytes(input2)).ToArray();
+            return sha256.ComputeHash(combined);
         }
 
         private async Task HandleClientAsync()
@@ -184,81 +243,65 @@ namespace Agent
             }
         }
 
-        private void ProcessCommand(string command)
-        {
-            if (command.StartsWith("MOUSE_MOVE:"))
-            {
-                string[] parts = command.Substring(11).Split(',');
-                if (parts.Length == 2)
-                {
-                    int x = int.Parse(parts[0]);
-                    int y = int.Parse(parts[1]);
-                    _commandExecutor.MoveMouse(x, y);
-                }
-            }
-            else if (command.StartsWith("MOUSE_DOWN:"))
-            {
-                string[] parts = command.Substring(11).Split(',');
-                if (parts.Length == 2)
-                {
-                    int x = int.Parse(parts[0]);
-                    int y = int.Parse(parts[1]);
-                    _commandExecutor.MouseDown(x, y);
-                }
-            }
-            else if (command.StartsWith("MOUSE_UP:"))
-            {
-                string[] parts = command.Substring(9).Split(',');
-                if (parts.Length == 2)
-                {
-                    int x = int.Parse(parts[0]);
-                    int y = int.Parse(parts[1]);
-                    _commandExecutor.MouseUp(x, y);
-                }
-            }
-            else if (command.StartsWith("KEY_PRESS:"))
-            {
-                string vkCodeStr = command.Substring(10);
-                if (int.TryParse(vkCodeStr, out int vkCode))
-                {
-                    _commandExecutor.KeyPress(vkCode);
-                }
-            }
-            else if (command.StartsWith("KEY_TYPE:"))
-            {
-                string text = command.Substring(9);
-                _commandExecutor.TypeText(text);
-            }
-            else if (command.StartsWith("FILE_RECV:"))
-            {
-                string[] parts = command.Substring(10).Split(':');
-                if (parts.Length >= 2)
-                {
-                    string filename = parts[0];
-                    long fileSize = long.Parse(parts[1]);
-                    _commandExecutor.ReceiveFile(filename, fileSize, _stream!);
-                }
-            }
-        }
-
+        // ── 中继模式：截图发送 ─────────────────────────────────
         private async void CaptureTimer_Tick(object? sender, EventArgs e)
         {
-            if (!_isConnected || _stream == null) return;
+            if (!_isConnected) return;
 
             try
             {
                 byte[] frameData = _screenCapture.CaptureScreen();
 
-                byte[] lengthPrefix = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(frameData.Length + 1));
-                byte[] frameType = new byte[1] { 1 };
-
-                await _stream.WriteAsync(lengthPrefix);
-                await _stream.WriteAsync(frameType);
-                await _stream.WriteAsync(frameData);
+                if (_useRelay)
+                {
+                    await _networkService.WriteFrameAsync(frameData, 1);
+                }
+                else if (_stream != null)
+                {
+                    byte[] lengthPrefix = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(frameData.Length + 1));
+                    byte[] frameType = new byte[1] { 1 };
+                    await _stream.WriteAsync(lengthPrefix);
+                    await _stream.WriteAsync(frameType);
+                    await _stream.WriteAsync(frameData);
+                }
             }
             catch
             {
                 _captureTimer.Stop();
+            }
+        }
+
+        // ── 命令处理 ────────────────────────────────────────────
+        private void ProcessCommand(string command)
+        {
+            if (command.StartsWith("MOUSE_MOVE:"))
+            {
+                var parts = command.Substring(11).Split(',');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
+                    _commandExecutor.MoveMouse(x, y);
+            }
+            else if (command.StartsWith("MOUSE_DOWN:"))
+            {
+                var parts = command.Substring(11).Split(',');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
+                    _commandExecutor.MouseDown(x, y);
+            }
+            else if (command.StartsWith("MOUSE_UP:"))
+            {
+                var parts = command.Substring(9).Split(',');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
+                    _commandExecutor.MouseUp(x, y);
+            }
+            else if (command.StartsWith("KEY_PRESS:"))
+            {
+                string vkCodeStr = command.Substring(10);
+                if (int.TryParse(vkCodeStr, out int vkCode))
+                    _commandExecutor.KeyPress(vkCode);
+            }
+            else if (command.StartsWith("KEY_TYPE:"))
+            {
+                string text = command.Substring(9);
+                _commandExecutor.TypeText(text);
             }
         }
 
@@ -268,18 +311,23 @@ namespace Agent
             BitConverter.GetBytes(IPAddress.HostToNetworkOrder(width)).CopyTo(sizeData, 0);
             BitConverter.GetBytes(IPAddress.HostToNetworkOrder(height)).CopyTo(sizeData, 4);
 
-            byte[] lengthPrefix = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(9));
-            byte[] frameType = new byte[1] { 2 };
-
-            await _stream!.WriteAsync(lengthPrefix);
-            await _stream.WriteAsync(frameType);
-            await _stream.WriteAsync(sizeData);
+            if (_useRelay)
+            {
+                await _networkService.WriteFrameAsync(sizeData, 2);
+            }
+            else if (_stream != null)
+            {
+                byte[] lengthPrefix = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(9));
+                byte[] frameType = new byte[1] { 2 };
+                await _stream.WriteAsync(lengthPrefix);
+                await _stream.WriteAsync(frameType);
+                await _stream.WriteAsync(sizeData);
+            }
         }
 
         private void DisconnectClient()
         {
             _isConnected = false;
-            _captureTimer.Stop();
             ConnectionStatus.Status = StatusIndicator.StatusType.Gray;
 
             try { _stream?.Close(); } catch { }
@@ -289,17 +337,12 @@ namespace Agent
             _client = null;
 
             if (_isRunning)
-            {
                 UpdateStatus("Disconnected - Waiting for connection...");
-            }
         }
 
         private void UpdateStatus(string message)
         {
-            Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = message;
-            });
+            Dispatcher.Invoke(() => StatusText.Text = message);
         }
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
