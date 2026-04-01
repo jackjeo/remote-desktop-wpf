@@ -14,7 +14,7 @@ namespace Agent
         private NetworkStream? _stream;
         private RelayClient? _relayClient;
 
-        public string? RelayServerURL { get; set; }
+        public string? RelayServerURL { get; set; } = "http://aids.caretop.com";
         public bool UseRelay => !string.IsNullOrEmpty(RelayServerURL);
 
         public event EventHandler<string>? DataReceived;
