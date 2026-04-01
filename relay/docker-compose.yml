@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  relay:
+    build: .
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "8082:8082"
+    restart: always
+    environment:
+      - RELAY_PORT=8080
+      - AGENT_WS_PORT=8081
+      - CONTROLLER_WS_PORT=8082
+      - JWT_SECRET=your-secret-key
